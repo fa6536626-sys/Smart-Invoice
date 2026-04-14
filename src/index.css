@@ -1,0 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Noto Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --color-primary: #2D5CFE;
+  --color-bg: #F0F2F5;
+  --color-card: #FFFFFF;
+  --color-border: #DEE2E6;
+  --color-text-main: #1A1D23;
+  --color-text-muted: #6C757D;
+  --color-accent: #059669;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-text-main antialiased;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-5 py-2 rounded-md font-semibold text-sm transition-all cursor-pointer border border-transparent;
+  }
+  .btn-primary {
+    @apply bg-primary text-white hover:bg-blue-700;
+  }
+  .btn-outline {
+    @apply bg-transparent border-border text-text-main hover:bg-slate-50;
+  }
+  .card {
+    @apply bg-card border border-border rounded-xl shadow-sm;
+  }
+}

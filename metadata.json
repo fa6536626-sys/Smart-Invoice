@@ -1,0 +1,6 @@
+{
+  "name": "Smart Invoice & Receipt Processor",
+  "description": "Extract data from PDF invoices and receipts using AI, aggregate totals, and export to Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
