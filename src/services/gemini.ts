@@ -22,25 +22,40 @@ export async function extractDataFromFile(file: File): Promise<ExtractedData[]> 
   
   const prompt = `
     Extract all data from this ${file.type.includes('pdf') ? 'PDF document' : 'image'}.
-    Identify if it is an invoice (فاتورة) or a payment receipt (إيصال سداد / كشف حساب عملية).
+    Identify if it is an invoice (فاتورة), a payment receipt (إيصال سداد / كشف حساب عملية), or a GOSI invoice (فاتورة التأمينات الاجتماعية).
     
-    For Invoices, extract:
-    - Entity Name (اسم المنشأة)
+    For Invoices (including GOSI):
+    - Entity Name (اسم المنشأة): For GOSI, use "التأمينات الاجتماعية" or the facility name mentioned.
     - Tax Number (الرقم الضريبي)
-    - Date (التاريخ)
-    - Total Amount (المبلغ الإجمالي)
+    - Date (التاريخ): Use the "تاريخ إصدار الفاتورة".
+    - Total Amount (المبلغ الإجمالي): Use the "مبلغ الفاتورة".
     - Tax Amount (مبلغ الضريبة)
     - Location (موقع المنشأة)
-    - Workshop Number (رقم الورشة) if available.
+    - Invoice Number (رقم الفاتورة): Specifically for GOSI, extract the "رقم الفاتورة" at the top.
     
-    For Payment Receipts (including Bank Receipts/SADAD), extract:
+    Important for GOSI: Even if the document has multiple pages with details, treat it as ONE single invoice using the main invoice number and total amount.
+    
+    For Payment Receipts (including Bank Receipts/SADAD):
     - Reference Number (الرقم المرجعي / رقم العملية)
     - Payment Field/Service (اسم مجال سدادها / تفاصيل العملية)
     - Amount (المبلغ) - ignore negative signs if present, just extract the absolute value.
     - Date (التاريخ)
     
-    Return the data as an array of objects. If a PDF has multiple receipts/invoices on different pages, return them all.
-    Ensure amounts are numbers.
+    Return the data as an array of objects with the following properties:
+    - entityName (اسم المنشأة)
+    - taxNumber (الرقم الضريبي أو رقم الفاتورة)
+    - date (التاريخ)
+    - amount (المبلغ الإجمالي)
+    - taxAmount (مبلغ الضريبة)
+    - location (الموقع)
+    - referenceNumber (الرقم المرجعي)
+    - paymentField (مجال السداد)
+    
+    Important for GOSI:
+    - Map "رقم الفاتورة" to "taxNumber".
+    - Map "مبلغ الفاتورة" to "amount".
+    - Map "تاريخ إصدار الفاتورة" to "date".
+    - Treat the whole document as ONE single object.
   `;
 
   const response = await ai.models.generateContent({

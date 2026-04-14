@@ -22,7 +22,7 @@ export default function App() {
         
         // Initialize taxEnabled and calculate tax if needed
         const processedResults = results.map(res => {
-          const utilityKeywords = ["كهرباء", "ماء", "مياه", "اتصالات", "هاتف", "جوال", "stc", "mobily", "zain", "nwc", "المياه الوطنية", "السعودية للطاقة", "saudi electricity"];
+          const utilityKeywords = ["كهرباء", "ماء", "مياه", "اتصالات", "هاتف", "جوال", "stc", "mobily", "zain", "nwc", "المياه الوطنية", "السعودية للطاقة", "saudi electricity", "booking", "بوكينج"];
           const fieldToSearch = (res.paymentField || res.entityName || "").toLowerCase();
           const isUtility = utilityKeywords.some(kw => fieldToSearch.includes(kw));
           
