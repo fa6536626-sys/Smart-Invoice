@@ -1,13 +1,97 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
 import { extractDataFromFile, ExtractedData } from './services/gemini';
-import { FileText, History } from 'lucide-react';
+import { FileText, History, Cloud, CloudOff } from 'lucide-react';
+import { supabase } from './lib/supabase';
 
 export default function App() {
-  const [data, setData] = useState<ExtractedData[]>([]);
+  const [data, setData] = useState<ExtractedData[]>(() => {
+    const saved = localStorage.getItem('extracted_data');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse saved data", e);
+        return [];
+      }
+    }
+    return [];
+  });
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Load data from Supabase on mount
+  useEffect(() => {
+    const loadSupabaseData = async () => {
+      if (!supabase) return;
+      
+      try {
+        const { data: supabaseData, error } = await supabase
+          .from('extracted_invoices')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        
+        if (supabaseData && supabaseData.length > 0) {
+          // Merge with local data or replace? 
+          // For now, let's replace local with cloud if cloud has data
+          setData(supabaseData);
+        }
+      } catch (err) {
+        console.error('Error loading from Supabase:', err);
+      }
+    };
+
+    loadSupabaseData();
+  }, []);
+
+  // Sync to local storage and Supabase
+  useEffect(() => {
+    localStorage.setItem('extracted_data', JSON.stringify(data));
+    
+    const syncToSupabase = async () => {
+      if (!supabase || data.length === 0) return;
+      
+      setIsSyncing(true);
+      try {
+        // Simple sync strategy: delete all and re-insert (for small datasets)
+        // In a real app, you'd use upsert or incremental sync
+        const { error: deleteError } = await supabase
+          .from('extracted_invoices')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all
+
+        if (deleteError) throw deleteError;
+
+        const { error: insertError } = await supabase
+          .from('extracted_invoices')
+          .insert(data.map(item => ({
+            entity_name: item.entityName,
+            tax_number: item.taxNumber,
+            date: item.date,
+            amount: item.amount,
+            tax_amount: item.taxAmount,
+            tax_enabled: item.taxEnabled,
+            location: item.location,
+            reference_number: item.referenceNumber,
+            payment_field: item.paymentField
+          })));
+
+        if (insertError) throw insertError;
+      } catch (err) {
+        console.error('Error syncing to Supabase:', err);
+      } finally {
+        setIsSyncing(false);
+      }
+    };
+
+    const timeoutId = setTimeout(syncToSupabase, 2000); // Debounce sync
+    return () => clearTimeout(timeoutId);
+  }, [data]);
 
   const handleFilesSelected = async (files: File[]) => {
     setIsProcessing(true);
@@ -108,8 +192,15 @@ export default function App() {
     }));
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     setData([]);
+    if (supabase) {
+      try {
+        await supabase.from('extracted_invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (err) {
+        console.error('Error clearing Supabase:', err);
+      }
+    }
   };
 
   return (
@@ -184,8 +275,21 @@ export default function App() {
 
       {/* Footer */}
       <footer className="h-[60px] bg-card border-t border-border flex items-center justify-between px-10 shrink-0 text-xs text-text-muted">
-        <div className="flex gap-5">
-          <span>متصل بقاعدة البيانات</span>
+        <div className="flex gap-5 items-center">
+          <div className="flex items-center gap-2">
+            {supabase ? (
+              <>
+                <Cloud className={`w-4 h-4 ${isSyncing ? 'text-blue-500 animate-pulse' : 'text-green-500'}`} />
+                <span>{isSyncing ? 'جاري المزامنة مع السحابة...' : 'متصل بـ Supabase'}</span>
+              </>
+            ) : (
+              <>
+                <CloudOff className="w-4 h-4 text-amber-500" />
+                <span>وضع الحفظ المحلي (Supabase غير مهيأ)</span>
+              </>
+            )}
+          </div>
+          <div className="h-4 w-px bg-border" />
           <span>آخر تحديث: {new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
         <div>
