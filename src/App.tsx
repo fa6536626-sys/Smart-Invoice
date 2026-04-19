@@ -22,11 +22,15 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Load data from Supabase on mount
   useEffect(() => {
     const loadSupabaseData = async () => {
-      if (!supabase) return;
+      if (!supabase) {
+        setIsLoaded(true);
+        return;
+      }
       
       try {
         const { data: supabaseData, error } = await supabase
@@ -37,12 +41,26 @@ export default function App() {
         if (error) throw error;
         
         if (supabaseData && supabaseData.length > 0) {
-          // Merge with local data or replace? 
-          // For now, let's replace local with cloud if cloud has data
-          setData(supabaseData);
+          const mappedData: ExtractedData[] = supabaseData.map(item => ({
+            id: item.id,
+            type: item.type || (item.tax_number ? 'invoice' : 'receipt'),
+            entityName: item.entity_name,
+            taxNumber: item.tax_number,
+            date: item.date,
+            amount: Number(item.amount),
+            taxAmount: Number(item.tax_amount),
+            taxEnabled: item.tax_enabled,
+            location: item.location,
+            referenceNumber: item.reference_number,
+            paymentField: item.payment_field,
+            fileName: 'سجل سحابي'
+          }));
+          setData(mappedData);
         }
       } catch (err) {
         console.error('Error loading from Supabase:', err);
+      } finally {
+        setIsLoaded(true);
       }
     };
 
@@ -51,37 +69,54 @@ export default function App() {
 
   // Sync to local storage and Supabase
   useEffect(() => {
-    localStorage.setItem('extracted_data', JSON.stringify(data));
+    if (!isLoaded) return;
+
+    try {
+      localStorage.setItem('extracted_data', JSON.stringify(data));
+    } catch (e) {
+      console.warn("LocalStorage full, only cloud sync active");
+    }
     
     const syncToSupabase = async () => {
-      if (!supabase || data.length === 0) return;
+      if (!supabase) return;
       
       setIsSyncing(true);
       try {
-        // Simple sync strategy: delete all and re-insert (for small datasets)
-        // In a real app, you'd use upsert or incremental sync
-        const { error: deleteError } = await supabase
-          .from('extracted_invoices')
-          .delete()
-          .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all
+        // Only sync items that don't have an ID (newly added)
+        const newItems = data.filter(item => !item.id);
+        
+        if (newItems.length > 0) {
+          const { data: insertedData, error: insertError } = await supabase
+            .from('extracted_invoices')
+            .insert(newItems.map(item => ({
+              type: item.type,
+              entity_name: item.entityName,
+              tax_number: item.taxNumber,
+              date: item.date,
+              amount: item.amount,
+              tax_amount: item.taxAmount,
+              tax_enabled: item.taxEnabled,
+              location: item.location,
+              reference_number: item.referenceNumber,
+              payment_field: item.paymentField
+            })))
+            .select();
 
-        if (deleteError) throw deleteError;
+          if (insertError) throw insertError;
 
-        const { error: insertError } = await supabase
-          .from('extracted_invoices')
-          .insert(data.map(item => ({
-            entity_name: item.entityName,
-            tax_number: item.taxNumber,
-            date: item.date,
-            amount: item.amount,
-            tax_amount: item.taxAmount,
-            tax_enabled: item.taxEnabled,
-            location: item.location,
-            reference_number: item.referenceNumber,
-            payment_field: item.paymentField
-          })));
-
-        if (insertError) throw insertError;
+          // Update local state with the IDs from Supabase to prevent re-syncing
+          if (insertedData) {
+            setData(prev => prev.map(localItem => {
+              const matched = insertedData.find(dbItem => 
+                dbItem.entity_name === localItem.entityName && 
+                dbItem.amount === localItem.amount && 
+                dbItem.date === localItem.date &&
+                !localItem.id
+              );
+              return matched ? { ...localItem, id: matched.id } : localItem;
+            }));
+          }
+        }
       } catch (err) {
         console.error('Error syncing to Supabase:', err);
       } finally {
@@ -91,42 +126,66 @@ export default function App() {
 
     const timeoutId = setTimeout(syncToSupabase, 2000); // Debounce sync
     return () => clearTimeout(timeoutId);
-  }, [data]);
+  }, [data, isLoaded]);
 
   const handleFilesSelected = async (files: File[]) => {
     setIsProcessing(true);
     setError(null);
     
     try {
+      const BATCH_SIZE = 3; // Process 3 files at a time to stay within rate limits
+      const resultsArray: ExtractedData[][] = [];
+      
+      for (let i = 0; i < files.length; i += BATCH_SIZE) {
+        const batch = files.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch.map(async (file) => {
+          try {
+            const results = await extractDataFromFile(file);
+            
+            // Initialize taxEnabled and calculate tax if needed
+            return results.map(res => {
+              const utilityKeywords = [
+                "كهرباء", "الكهرباء", "السعودية للطاقة", "saudi electricity", "الشركة السعودية للكهرباء",
+                "ماء", "مياه", "المياه الوطنية", "nwc", "الشركة الوطنية للمياه", "national water company",
+                "اتصالات", "هاتف", "جوال", "stc", "اس تي سي", "الاتصالات السعودية", "mobily", "موبايلي", "zain", "زين",
+                "booking", "بوكينج", "البوكينج", "booking.com b.v."
+              ];
+              const fieldToSearch = (res.paymentField || res.entityName || "").toLowerCase();
+              const isUtility = utilityKeywords.some(kw => fieldToSearch.includes(kw));
+              
+              let taxEnabled = res.taxAmount ? res.taxAmount > 0 : false;
+              let taxAmount = res.taxAmount;
+
+              if (isUtility) {
+                taxEnabled = true;
+                if (!taxAmount || taxAmount === 0) {
+                  taxAmount = Number((res.amount * 0.15 / 1.15).toFixed(2));
+                }
+              }
+
+              return {
+                ...res,
+                taxEnabled,
+                taxAmount
+              };
+            });
+          } catch (err) {
+            console.error(`Error processing file ${file.name}:`, err);
+            return []; // Skip failed files instead of crashing the whole process
+          }
+        }));
+        resultsArray.push(...batchResults);
+        
+        // Small delay between batches to be safe with rate limits
+        if (i + BATCH_SIZE < files.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
       const allResults: ExtractedData[] = [];
       let duplicateCount = 0;
 
-      for (const file of files) {
-        const results = await extractDataFromFile(file);
-        
-        // Initialize taxEnabled and calculate tax if needed
-        const processedResults = results.map(res => {
-          const utilityKeywords = ["كهرباء", "ماء", "مياه", "اتصالات", "هاتف", "جوال", "stc", "mobily", "zain", "nwc", "المياه الوطنية", "السعودية للطاقة", "saudi electricity", "booking", "بوكينج"];
-          const fieldToSearch = (res.paymentField || res.entityName || "").toLowerCase();
-          const isUtility = utilityKeywords.some(kw => fieldToSearch.includes(kw));
-          
-          let taxEnabled = res.taxAmount ? res.taxAmount > 0 : false;
-          let taxAmount = res.taxAmount;
-
-          if (isUtility) {
-            taxEnabled = true;
-            if (!taxAmount || taxAmount === 0) {
-              taxAmount = Number((res.amount * 0.15 / 1.15).toFixed(2));
-            }
-          }
-
-          return {
-            ...res,
-            taxEnabled,
-            taxAmount
-          };
-        });
-
+      for (const processedResults of resultsArray) {
         // Filter duplicates
         for (const newItem of processedResults) {
           const normalize = (s?: string) => s?.trim().toLowerCase() || "";
@@ -161,7 +220,7 @@ export default function App() {
         setError(`تم تجاهل ${duplicateCount} مستندات مكررة (تطابق في الاسم والرقم والتاريخ والقيمة).`);
       }
       
-      setData(prev => [...prev, ...allResults]);
+      setData(prev => [...allResults, ...prev]);
     } catch (err) {
       console.error(err);
       setError("حدث خطأ أثناء معالجة الملفات. يرجى المحاولة مرة أخرى.");
@@ -170,8 +229,17 @@ export default function App() {
     }
   };
 
-  const removeRow = (index: number) => {
+  const removeRow = async (index: number) => {
+    const itemToRemove = data[index];
     setData(prev => prev.filter((_, i) => i !== index));
+    
+    if (supabase && itemToRemove.id) {
+      try {
+        await supabase.from('extracted_invoices').delete().eq('id', itemToRemove.id);
+      } catch (err) {
+        console.error('Error deleting from Supabase:', err);
+      }
+    }
   };
 
   const toggleTax = (index: number) => {
@@ -193,13 +261,19 @@ export default function App() {
   };
 
   const clearAll = async () => {
-    setData([]);
-    if (supabase) {
-      try {
-        await supabase.from('extracted_invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      } catch (err) {
-        console.error('Error clearing Supabase:', err);
+    const password = window.prompt("يرجى إدخال الرقم السري لمسح جميع البيانات:");
+    
+    if (password === "00") {
+      setData([]);
+      if (supabase) {
+        try {
+          await supabase.from('extracted_invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        } catch (err) {
+          console.error('Error clearing Supabase:', err);
+        }
       }
+    } else if (password !== null) {
+      alert("عذراً، الرقم السري غير صحيح.");
     }
   };
 

@@ -1,20 +1,49 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# نظام استخراج البيانات الذكي - Smart Invoice Processor
 
-# Run and deploy your AI Studio app
+نظام متقدم لاستخراج بيانات الفواتير والإيصالات باستخدام الذكاء الاصطناعي (Gemini AI)، مع دعم المزامنة السحابية (Supabase) وتصدير البيانات إلى Excel.
 
-This contains everything you need to run your app locally.
+## المميزات (Features)
+- **AI Extraction**: استخراج دقيق للبيانات من الصور وملفات PDF.
+- **Cloud Sync**: مزامنة تلقائية مع Supabase لضمان حفظ البيانات.
+- **Unlimited Processing**: معالجة عدد غير محدود من الملفات بنظام الدفعات (Batch Processing).
+- **Auto Tax Calculation**: حساب تلقائي للضريبة (15%) للجهات الرئيسية (كهرباء، مياه، اتصالات، بوكينج).
+- **Excel Export**: تصدير كافة البيانات المستخرجة إلى ملف Excel بضغطة زر.
 
-View your app in AI Studio: https://ai.studio/apps/de2ef1e0-5504-46d4-920b-4d4e6b569427
+## المتطلبات (Prerequisites)
+- Node.js (v18+)
+- مفتاح API لـ [Google Gemini](https://aistudio.google.com/app/apikey)
+- مشروع [Supabase](https://supabase.com) (اختياري للمزامنة السحابية)
 
-## Run Locally
+## التشغيل المحلي (Local Setup)
 
-**Prerequisites:**  Node.js
+1. **تثبيت المكتبات**:
+   ```bash
+   npm install
+   ```
 
+2. **إعداد المتغيرات البيئية**:
+   قم بإنشاء ملف `.env` في المجلد الرئيسي وأضف القيم التالية:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key
+   VITE_SUPABASE_URL=your_supabase_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+3. **تشغيل التطبيق**:
+   ```bash
+   npm run dev
+   ```
+
+## النشر (Deployment)
+يمكن نشر هذا التطبيق بسهولة على منصات مثل **Vercel** أو **Netlify**. تأكد من إضافة المتغيرات البيئية (Environment Variables) في إعدادات المنصة.
+
+---
+
+## English Description
+An advanced AI-powered system to extract data from invoices and receipts using Gemini AI, featuring cloud synchronization with Supabase and Excel export capabilities.
+
+### Key Capabilities:
+- High-precision OCR and data extraction.
+- Real-time cloud sync.
+- Batch processing for large volumes of documents.
+- Automatic VAT calculation for major utility providers.

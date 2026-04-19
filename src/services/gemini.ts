@@ -1,8 +1,9 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export interface ExtractedData {
+  id?: string;
   type: "invoice" | "receipt";
   entityName?: string;
   taxNumber?: string;
@@ -21,41 +22,31 @@ export async function extractDataFromFile(file: File): Promise<ExtractedData[]> 
   const base64Data = await fileToBase64(file);
   
   const prompt = `
-    Extract all data from this ${file.type.includes('pdf') ? 'PDF document' : 'image'}.
-    Identify if it is an invoice (فاتورة), a payment receipt (إيصال سداد / كشف حساب عملية), or a GOSI invoice (فاتورة التأمينات الاجتماعية).
+    Analyze the provided ${file.type.includes('pdf') ? 'PDF' : 'image'} with high precision OCR.
+    The document is in Arabic/English. Extract financial data accurately.
     
-    For Invoices (including GOSI):
-    - Entity Name (اسم المنشأة): For GOSI, use "التأمينات الاجتماعية" or the facility name mentioned.
-    - Tax Number (الرقم الضريبي)
-    - Date (التاريخ): Use the "تاريخ إصدار الفاتورة".
-    - Total Amount (المبلغ الإجمالي): Use the "مبلغ الفاتورة".
-    - Tax Amount (مبلغ الضريبة)
-    - Location (موقع المنشأة)
-    - Invoice Number (رقم الفاتورة): Specifically for GOSI, extract the "رقم الفاتورة" at the top.
+    Classification:
+    1. Invoice (فاتورة): Standard commercial invoice.
+    2. GOSI Invoice (فاتورة التأمينات الاجتماعية): Treat as ONE invoice. Use "رقم الفاتورة" as taxNumber, "مبلغ الفاتورة" as amount, and facility name as entityName.
+    3. Payment Receipt (إيصال سداد): Bank transfer, SADAD, or POS receipt.
     
-    Important for GOSI: Even if the document has multiple pages with details, treat it as ONE single invoice using the main invoice number and total amount.
+    Fields to Extract:
+    - type: "invoice" or "receipt".
+    - entityName: Name of the company/entity.
+    - taxNumber: VAT number or Invoice number.
+    - date: Transaction/Invoice date.
+    - amount: Total amount (Gross).
+    - taxAmount: VAT amount if explicitly mentioned.
+    - location: City or branch.
+    - referenceNumber: For receipts, the transaction ID.
+    - paymentField: For receipts, format as follows:
+        * If SADAD/Bank Statement: "التفاصيل: مدفوعات سداد - [Service Name]"
+        * If Transfer Receipt: "إلى (المستفيد): [Beneficiary Name]"
+        * If Bill/Utility (Electricity, Water, ZATCA, etc.): "اسم المفوتر: [Biller Name]"
     
-    For Payment Receipts (including Bank Receipts/SADAD):
-    - Reference Number (الرقم المرجعي / رقم العملية)
-    - Payment Field/Service (اسم مجال سدادها / تفاصيل العملية)
-    - Amount (المبلغ) - ignore negative signs if present, just extract the absolute value.
-    - Date (التاريخ)
-    
-    Return the data as an array of objects with the following properties:
-    - entityName (اسم المنشأة)
-    - taxNumber (الرقم الضريبي أو رقم الفاتورة)
-    - date (التاريخ)
-    - amount (المبلغ الإجمالي)
-    - taxAmount (مبلغ الضريبة)
-    - location (الموقع)
-    - referenceNumber (الرقم المرجعي)
-    - paymentField (مجال السداد)
-    
-    Important for GOSI:
-    - Map "رقم الفاتورة" to "taxNumber".
-    - Map "مبلغ الفاتورة" to "amount".
-    - Map "تاريخ إصدار الفاتورة" to "date".
-    - Treat the whole document as ONE single object.
+    Constraint:
+    - If GOSI: Return exactly ONE object for the entire document.
+    - Return JSON array.
   `;
 
   const response = await ai.models.generateContent({
@@ -74,6 +65,7 @@ export async function extractDataFromFile(file: File): Promise<ExtractedData[]> 
       },
     ],
     config: {
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.ARRAY,
@@ -87,7 +79,6 @@ export async function extractDataFromFile(file: File): Promise<ExtractedData[]> 
             amount: { type: Type.NUMBER },
             taxAmount: { type: Type.NUMBER },
             location: { type: Type.STRING },
-            workshopNumber: { type: Type.STRING },
             referenceNumber: { type: Type.STRING },
             paymentField: { type: Type.STRING },
           },

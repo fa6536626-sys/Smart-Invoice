@@ -1,6 +1,6 @@
 {
-  "name": "Smart Invoice & Receipt Processor",
-  "description": "Extract data from PDF invoices and receipts using AI, aggregate totals, and export to Excel.",
+  "name": "نظام استخراج البيانات الذكي - Smart Invoice Processor",
+  "description": "نظام متقدم لاستخراج بيانات الفواتير والإيصالات باستخدام الذكاء الاصطناعي، مع دعم المزامنة السحابية وتصدير Excel.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

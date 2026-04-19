@@ -14,25 +14,52 @@ interface ResultsTableProps {
 
 export function ResultsTable({ data, onRemove, onToggleTax, onClear, view = 'table' }: ResultsTableProps) {
   const exportToExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(data.map(item => {
+    // Prepare data rows
+    const rows = data.map(item => {
       const tax = item.taxEnabled !== false ? (item.taxAmount || 0) : 0;
       return {
         'النوع': item.type === 'invoice' ? 'فاتورة' : 'إيصال',
-        'اسم المنشأة / المجال': item.entityName || item.paymentField || '-',
+        'اسم المنشأة / المجال': item.type === 'receipt' 
+          ? (item.paymentField || item.entityName || '-') 
+          : (item.entityName || item.paymentField || '-'),
         'الرقم الضريبي / المرجعي': item.taxNumber || item.referenceNumber || '-',
         'التاريخ': item.date || '-',
-        'المبلغ بدون ضريبة': (item.amount - tax).toFixed(2),
-        'الضريبة': tax.toFixed(2),
-        'المبلغ الإجمالي': item.amount.toFixed(2),
+        'المبلغ بدون ضريبة': Number((item.amount - tax).toFixed(2)),
+        'الضريبة': Number(tax.toFixed(2)),
+        'المبلغ الإجمالي': Number(item.amount.toFixed(2)),
         'الموقع': item.location || '-',
         'رقم الورشة': item.workshopNumber || '-',
         'اسم الملف': item.fileName
       };
-    }));
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+
+    // Add totals row with formulas
+    const lastRow = rows.length + 1; // +1 for header
+    const totalRowIndex = lastRow + 1;
+
+    // Add a label for the totals row
+    XLSX.utils.sheet_add_aoa(worksheet, [['الإجمالي']], { origin: `A${totalRowIndex}` });
+
+    // Add formulas for E, F, G columns
+    // E is column 5 (index 4), F is 6 (index 5), G is 7 (index 6)
+    const colE = XLSX.utils.encode_col(4);
+    const colF = XLSX.utils.encode_col(5);
+    const colG = XLSX.utils.encode_col(6);
+
+    worksheet[`${colE}${totalRowIndex}`] = { f: `SUM(${colE}2:${colE}${lastRow})`, t: 'n' };
+    worksheet[`${colF}${totalRowIndex}`] = { f: `SUM(${colF}2:${colF}${lastRow})`, t: 'n' };
+    worksheet[`${colG}${totalRowIndex}`] = { f: `SUM(${colG}2:${colG}${lastRow})`, t: 'n' };
+
+    // Update sheet range to include the new row
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    range.e.r = totalRowIndex - 1;
+    worksheet['!ref'] = XLSX.utils.encode_range(range);
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
-    XLSX.writeFile(workbook, "extracted_data.xlsx");
+    XLSX.writeFile(workbook, "نظام_استخراج_البيانات.xlsx");
   };
 
   const totals = data.reduce((acc, curr) => {
@@ -121,7 +148,9 @@ export function ResultsTable({ data, onRemove, onToggleTax, onClear, view = 'tab
             {data.map((item, idx) => (
               <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                 <td className="px-6 py-4 text-[13px] text-text-main font-semibold">
-                  {item.entityName || item.paymentField || '-'}
+                  {item.type === 'receipt' 
+                    ? (item.paymentField || item.entityName || '-') 
+                    : (item.entityName || item.paymentField || '-')}
                 </td>
                 <td className="px-6 py-4 text-[13px] text-text-muted font-mono">
                   {item.taxNumber || item.referenceNumber || '-'}
