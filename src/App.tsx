@@ -1,88 +1,128 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
 import { extractDataFromFile, ExtractedData } from './services/gemini';
-import { FileText, History, Cloud, CloudOff } from 'lucide-react';
-import { supabase } from './lib/supabase';
+import { FileText, History, Cloud, CloudOff, LogOut, LogIn, User as UserIcon, Settings, Database, X } from 'lucide-react';
+import { supabase as initialSupabase, getSupabaseConfig, saveSupabaseConfig, resetSupabaseConfig } from './lib/supabase';
+import { User, SupabaseClient } from '@supabase/supabase-js';
 
 export default function App() {
-  const [data, setData] = useState<ExtractedData[]>(() => {
-    const saved = localStorage.getItem('extracted_data');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse saved data", e);
-        return [];
-      }
-    }
-    return [];
-  });
+  const [supabase, setSupabase] = useState<SupabaseClient | null>(initialSupabase);
+  const [showConfig, setShowConfig] = useState(false);
+  const [config, setConfig] = useState(getSupabaseConfig());
+
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [data, setData] = useState<ExtractedData[]>([]);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load data from Supabase on mount
+  const updateConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveSupabaseConfig(config.url, config.key);
+    const newClient = initialSupabase; // The variable in lib is updated
+    setSupabase(newClient);
+    setShowConfig(false);
+    // Force a reload of auth session
+    window.location.reload(); 
+  };
+
+  const handleResetConfig = () => {
+    resetSupabaseConfig();
+    setSupabase(null);
+    setConfig({ url: '', key: '' });
+    window.location.reload();
+  };
+
+  // Handle Auth
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    // Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (!session) {
+        setData([]); // Clear data on logout
+        // localStorage.removeItem('extracted_data'); // This might be dangerous if we want local persistent data, but okay for now
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [supabase]);
+
+  // Load data from Supabase on user change
   useEffect(() => {
     const loadSupabaseData = async () => {
-      if (!supabase) {
-        setIsLoaded(true);
+      if (!supabase || !user) {
+        if (!user) setIsLoaded(true);
         return;
       }
       
+      setIsProcessing(true);
       try {
         const { data: supabaseData, error } = await supabase
           .from('extracted_invoices')
           .select('*')
+          .eq('user_id', user.id)
           .order('created_at', { ascending: false });
 
         if (error) throw error;
         
-        if (supabaseData && supabaseData.length > 0) {
-          const mappedData: ExtractedData[] = supabaseData.map(item => ({
-            id: item.id,
-            type: item.type || (item.tax_number ? 'invoice' : 'receipt'),
-            entityName: item.entity_name,
-            taxNumber: item.tax_number,
-            date: item.date,
-            amount: Number(item.amount),
-            taxAmount: Number(item.tax_amount),
-            taxEnabled: item.tax_enabled,
-            location: item.location,
-            referenceNumber: item.reference_number,
-            paymentField: item.payment_field,
-            fileName: 'سجل سحابي'
-          }));
-          setData(mappedData);
-        }
+        const mappedData: ExtractedData[] = (supabaseData || []).map(item => ({
+          id: item.id,
+          type: item.type || (item.tax_number ? 'invoice' : 'receipt'),
+          entityName: item.entity_name,
+          taxNumber: item.tax_number,
+          date: item.date,
+          amount: Number(item.amount),
+          taxAmount: Number(item.tax_amount),
+          taxEnabled: item.tax_enabled,
+          location: item.location,
+          referenceNumber: item.reference_number,
+          paymentField: item.payment_field,
+          fileName: 'سجل سحابي'
+        }));
+        setData(mappedData);
       } catch (err) {
         console.error('Error loading from Supabase:', err);
       } finally {
         setIsLoaded(true);
+        setIsProcessing(false);
       }
     };
 
     loadSupabaseData();
-  }, []);
+  }, [user]);
 
   // Sync to local storage and Supabase
   useEffect(() => {
     if (!isLoaded) return;
 
+    if (!user) return;
+
     try {
-      localStorage.setItem('extracted_data', JSON.stringify(data));
+      localStorage.setItem(`extracted_data_${user.id}`, JSON.stringify(data));
     } catch (e) {
       console.warn("LocalStorage full, only cloud sync active");
     }
     
     const syncToSupabase = async () => {
-      if (!supabase) return;
+      if (!supabase || !user) return;
       
       setIsSyncing(true);
       try {
-        // Only sync items that don't have an ID (newly added)
         const newItems = data.filter(item => !item.id);
         
         if (newItems.length > 0) {
@@ -98,7 +138,8 @@ export default function App() {
               tax_enabled: item.taxEnabled,
               location: item.location,
               reference_number: item.referenceNumber,
-              payment_field: item.paymentField
+              payment_field: item.paymentField,
+              user_id: user.id
             })))
             .select();
 
@@ -233,31 +274,43 @@ export default function App() {
     const itemToRemove = data[index];
     setData(prev => prev.filter((_, i) => i !== index));
     
-    if (supabase && itemToRemove.id) {
+    if (supabase && user && itemToRemove.id) {
       try {
-        await supabase.from('extracted_invoices').delete().eq('id', itemToRemove.id);
+        await supabase.from('extracted_invoices').delete().eq('id', itemToRemove.id).eq('user_id', user.id);
       } catch (err) {
         console.error('Error deleting from Supabase:', err);
       }
     }
   };
 
-  const toggleTax = (index: number) => {
-    setData(prev => prev.map((item, i) => {
-      if (i === index) {
-        const isEnabled = item.taxEnabled !== false;
-        const newEnabled = !isEnabled;
-        
-        // If enabling and taxAmount is missing/zero, calculate 15% VAT (inclusive)
-        let newTaxAmount = item.taxAmount;
-        if (newEnabled && (!newTaxAmount || newTaxAmount === 0)) {
-          newTaxAmount = Number((item.amount * 0.15 / 1.15).toFixed(2));
-        }
-        
-        return { ...item, taxEnabled: newEnabled, taxAmount: newTaxAmount };
+  const toggleTax = async (index: number) => {
+    const item = data[index];
+    const isEnabled = item.taxEnabled !== false;
+    const newEnabled = !isEnabled;
+    
+    // If enabling and taxAmount is missing/zero, calculate 15% VAT (inclusive)
+    let newTaxAmount = item.taxAmount;
+    if (newEnabled && (!newTaxAmount || newTaxAmount === 0)) {
+      newTaxAmount = Number((item.amount * 0.15 / 1.15).toFixed(2));
+    }
+    
+    const updatedItem = { ...item, taxEnabled: newEnabled, taxAmount: newTaxAmount };
+    
+    setData(prev => prev.map((it, i) => i === index ? updatedItem : it));
+
+    if (supabase && user && item.id) {
+      try {
+        await supabase.from('extracted_invoices')
+          .update({ 
+            tax_enabled: newEnabled, 
+            tax_amount: newTaxAmount 
+          })
+          .eq('id', item.id)
+          .eq('user_id', user.id);
+      } catch (err) {
+        console.error('Error updating tax in Supabase:', err);
       }
-      return item;
-    }));
+    }
   };
 
   const clearAll = async () => {
@@ -265,9 +318,9 @@ export default function App() {
     
     if (password === "00") {
       setData([]);
-      if (supabase) {
+      if (supabase && user) {
         try {
-          await supabase.from('extracted_invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('extracted_invoices').delete().eq('user_id', user.id);
         } catch (err) {
           console.error('Error clearing Supabase:', err);
         }
@@ -277,31 +330,136 @@ export default function App() {
     }
   };
 
+  const handleLogin = async () => {
+    if (!supabase) return;
+    const email = window.prompt("ادخل البريد الإلكتروني:");
+    if (!email) return;
+    const password = window.prompt("ادخل كلمة المرور (يجب أن تكون ٦ خانات على الأقل):");
+    if (!password) return;
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      if (error.message.includes('Invalid login credentials')) {
+        const confirmSignUp = window.confirm("الحساب غير موجود، هل تريد إنشاء حساب جديد؟");
+        if (confirmSignUp) {
+          const { error: signUpError } = await supabase.auth.signUp({
+            email,
+            password,
+          });
+          if (signUpError) alert(signUpError.message);
+          else alert("تم إرسال رابط التفعيل لبريدك الإلكتروني (أو يمكنك الدخول مباشرة إذا كان التأكيد معطلاً).");
+        }
+      } else {
+        alert(error.message);
+      }
+    }
+  };
+
+  const handleLogout = async () => {
+    if (supabase) await supabase.auth.signOut();
+  };
+
+  if (authLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-bg">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen flex flex-col bg-bg" dir="rtl">
       {/* Header */}
       <header className="h-[70px] bg-card border-b-2 border-border flex items-center justify-between px-10 shrink-0">
         <div className="flex items-center gap-4">
-          <div className="w-8 h-8 bg-primary rounded-sm" />
-          <h1 className="text-xl font-bold text-text-main tracking-tight">نظام استخراج البيانات الذكي</h1>
+          <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center shadow-lg shadow-primary/20">
+            <FileText className="text-white w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-text-main tracking-tight leading-none">نظام استخراج البيانات</h1>
+            <span className="text-[10px] text-primary font-bold uppercase tracking-widest mt-1 block">Smart AI Processor</span>
+          </div>
         </div>
         
-        <div className="flex gap-3">
-          <div className="hidden sm:flex items-center gap-4 text-text-muted ml-6">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4" />
-              <span className="text-xs font-semibold">PDF & الصور</span>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setShowConfig(true)}
+            className={`flex items-center gap-2 p-2 rounded-lg border transition-all ${supabase ? 'text-green-600 border-green-100 bg-green-50' : 'text-amber-600 border-amber-100 bg-amber-50'}`}
+            title="إعدادات قاعدة البيانات"
+          >
+            <Database className="w-5 h-5" />
+            <span className="text-xs font-semibold hidden sm:inline">قاعدة البيانات</span>
+          </button>
+
+          {user ? (
+            <div className="flex items-center gap-3 bg-slate-50 p-1.5 pr-4 rounded-full border border-border">
+              <span className="text-xs font-medium text-text-muted">{user.email}</span>
+              <button 
+                onClick={handleLogout}
+                className="w-8 h-8 rounded-full bg-white border border-border flex items-center justify-center text-text-muted hover:text-red-500 hover:border-red-200 transition-all shadow-sm"
+                title="تسجيل الخروج"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
-            <div className="h-4 w-px bg-border" />
-            <div className="flex items-center gap-2">
-              <History className="w-4 h-4" />
-              <span className="text-xs font-semibold">تصدير Excel</span>
-            </div>
-          </div>
+          ) : (
+            <button 
+              onClick={handleLogin}
+              className="btn btn-primary px-6 flex items-center gap-2"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>تسجيل الدخول</span>
+            </button>
+          )}
         </div>
       </header>
 
-      <main className="flex-1 grid grid-cols-[280px_1fr] gap-6 p-6 lg:px-10 overflow-hidden">
+      {!user ? (
+        <main className="flex-1 flex flex-col items-center justify-center p-10 bg-gradient-to-b from-bg to-slate-50">
+          <div className="max-w-md w-full text-center space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="relative inline-block">
+              <div className="w-24 h-24 bg-primary/10 rounded-3xl flex items-center justify-center mx-auto mb-2 transform rotate-12 transition-transform hover:rotate-0">
+                <FileText className="w-12 h-12 text-primary" />
+              </div>
+              <div className="absolute -bottom-1 -right-1 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center">
+                <Cloud className="w-4 h-4 text-primary" />
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <h2 className="text-3xl font-black text-text-main">مرحباً بك في النظام الذكي</h2>
+              <p className="text-text-muted leading-relaxed">
+                قم بتسجيل الدخول للوصول إلى مساحتك الخاصة ومزامنة بياناتك بأمان عبر السحابة.
+              </p>
+            </div>
+
+            <button 
+              onClick={handleLogin}
+              className="w-full bg-primary text-white py-4 rounded-2xl font-bold shadow-xl shadow-primary/30 hover:bg-primary-dark transition-all active:scale-[0.98] flex items-center justify-center gap-3"
+            >
+              <LogIn className="w-5 h-5" />
+              ابدأ الآن ببياناتك المستقلة
+            </button>
+
+            <div className="flex items-center justify-center gap-4 text-xs text-text-muted pt-4">
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                آمن تماماً
+              </div>
+              <div className="w-px h-3 bg-border"></div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+                بيانات مستقلة لكل مستخدم
+              </div>
+            </div>
+          </div>
+        </main>
+      ) : (
+        <main className="flex-1 grid grid-cols-[300px_1fr] gap-6 p-6 lg:px-10 overflow-hidden">
         {/* Sidebar */}
         <aside className="flex flex-col gap-5 overflow-y-auto">
           <FileUpload onFilesSelected={handleFilesSelected} isProcessing={isProcessing} />
@@ -346,6 +504,7 @@ export default function App() {
           )}
         </section>
       </main>
+      )}
 
       {/* Footer */}
       <footer className="h-[60px] bg-card border-t border-border flex items-center justify-between px-10 shrink-0 text-xs text-text-muted">
@@ -370,6 +529,78 @@ export default function App() {
           تم استخراج بيانات {data.length} مستندات من الملفات المرفوعة
         </div>
       </footer>
+
+      {/* Configuration Modal */}
+      {showConfig && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/50 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300">
+            <header className="p-6 border-b border-border flex items-center justify-between">
+              <div className="flex items-center gap-3 text-primary">
+                <Database className="w-6 h-6" />
+                <h3 className="font-bold text-lg">إعدادات Supabase</h3>
+              </div>
+              <button 
+                onClick={() => setShowConfig(false)}
+                className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-text-muted" />
+              </button>
+            </header>
+            
+            <form onSubmit={updateConfig} className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-bold text-text-muted">Supabase API URL</label>
+                <input 
+                  type="url"
+                  required
+                  value={config.url}
+                  onChange={(e) => setConfig({ ...config, url: e.target.value })}
+                  placeholder="https://your-project.supabase.co"
+                  className="w-full px-4 py-3 bg-bg border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm ltr"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-bold text-text-muted">Anon / Publishable Key</label>
+                <input 
+                  type="password"
+                  required
+                  value={config.key}
+                  onChange={(e) => setConfig({ ...config, key: e.target.value })}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI..."
+                  className="w-full px-4 py-3 bg-bg border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm ltr"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="pt-4 flex gap-3">
+                <button 
+                  type="submit"
+                  className="flex-1 bg-primary text-white py-3 rounded-xl font-bold shadow-lg shadow-primary/20 hover:bg-primary-dark transition-all"
+                >
+                  حفظ الإعدادات
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleResetConfig}
+                  className="px-4 py-3 border border-red-100 text-red-500 rounded-xl hover:bg-red-50 transition-all font-bold text-sm"
+                >
+                  إعادة ضبط
+                </button>
+              </div>
+              
+              <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                <p className="text-[11px] text-blue-600 leading-relaxed font-medium">
+                  • سيتم حفظ المفاتيح محلياً في متصفحك.
+                  <br />
+                  • تأكد من صحة المفاتيح لضمان عمل المزامنة السحابية.
+                </p>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
