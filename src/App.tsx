@@ -3,13 +3,14 @@ import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
 import { extractDataFromFile, ExtractedData } from './services/gemini';
 import { FileText, History, Cloud, CloudOff, LogOut, LogIn, User as UserIcon, Settings, Database, X } from 'lucide-react';
-import { supabase as initialSupabase, getSupabaseConfig, saveSupabaseConfig, resetSupabaseConfig } from './lib/supabase';
+import { supabase as initialSupabase, getSupabaseConfig, saveSupabaseConfig, resetSupabaseConfig, testConnection } from './lib/supabase';
 import { User, SupabaseClient } from '@supabase/supabase-js';
 
 export default function App() {
   const [supabase, setSupabase] = useState<SupabaseClient | null>(initialSupabase);
   const [showConfig, setShowConfig] = useState(false);
   const [config, setConfig] = useState(getSupabaseConfig());
+  const [testStatus, setTestStatus] = useState<{ success?: boolean; message: string } | null>(null);
 
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -20,13 +21,17 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
+  const handleTestConnection = async () => {
+    setTestStatus({ message: 'جاري الاختبار...' });
+    const result = await testConnection(config.url, config.key);
+    setTestStatus(result);
+  };
+
   const updateConfig = (e: React.FormEvent) => {
     e.preventDefault();
     saveSupabaseConfig(config.url, config.key);
-    const newClient = initialSupabase; // The variable in lib is updated
-    setSupabase(newClient);
+    setSupabase(initialSupabase);
     setShowConfig(false);
-    // Force a reload of auth session
     window.location.reload(); 
   };
 
@@ -549,7 +554,8 @@ export default function App() {
             
             <form onSubmit={updateConfig} className="p-6 space-y-4">
               <div className="space-y-1.5">
-                <label className="text-sm font-bold text-text-muted">Supabase API URL</label>
+                <label className="text-sm font-bold text-text-muted">Supabase Project URL (API URL)</label>
+                <div className="text-[10px] text-text-muted mb-1">تجدها في Vercel Dashboard أو Supabase Settings</div>
                 <input 
                   type="url"
                   required
@@ -562,39 +568,56 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-bold text-text-muted">Anon / Publishable Key</label>
+                <label className="text-sm font-bold text-text-muted">Anon Payload / API Key</label>
+                <div className="text-[10px] text-text-muted mb-1">يجب أن تبدأ بـ eyJ... (Anon Key)</div>
                 <input 
                   type="password"
                   required
                   value={config.key}
                   onChange={(e) => setConfig({ ...config, key: e.target.value })}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI..."
+                  placeholder="Anon Key / Public Key"
                   className="w-full px-4 py-3 bg-bg border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm ltr"
                   dir="ltr"
                 />
               </div>
 
-              <div className="pt-4 flex gap-3">
-                <button 
-                  type="submit"
-                  className="flex-1 bg-primary text-white py-3 rounded-xl font-bold shadow-lg shadow-primary/20 hover:bg-primary-dark transition-all"
-                >
-                  حفظ الإعدادات
-                </button>
+              {testStatus && (
+                <div className={`p-3 rounded-xl text-xs font-bold flex items-center gap-2 ${testStatus.success ? 'bg-green-50 text-green-600 border border-green-100' : 'bg-red-50 text-red-600 border border-red-100'}`}>
+                  <div className={`w-2 h-2 rounded-full ${testStatus.success ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  {testStatus.message}
+                </div>
+              )}
+
+              <div className="pt-4 flex flex-col gap-3">
+                <div className="flex gap-3">
+                  <button 
+                    type="submit"
+                    className="flex-1 bg-primary text-white py-3 rounded-xl font-bold shadow-lg shadow-primary/20 hover:bg-primary-dark transition-all"
+                  >
+                    حفظ وتحديث
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleTestConnection}
+                    className="px-6 py-3 bg-white border border-border text-text-main rounded-xl hover:bg-slate-50 transition-all font-bold text-sm"
+                  >
+                    اختبار الاتصال
+                  </button>
+                </div>
                 <button 
                   type="button"
                   onClick={handleResetConfig}
-                  className="px-4 py-3 border border-red-100 text-red-500 rounded-xl hover:bg-red-50 transition-all font-bold text-sm"
+                  className="w-full py-3 text-red-500 rounded-xl hover:bg-red-50 transition-all font-bold text-xs border border-transparent hover:border-red-100"
                 >
-                  إعادة ضبط
+                  إعادة ضبط الإعدادات الافتراضية
                 </button>
               </div>
               
-              <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl">
-                <p className="text-[11px] text-blue-600 leading-relaxed font-medium">
-                  • سيتم حفظ المفاتيح محلياً في متصفحك.
+              <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                <p className="text-[11px] text-text-muted leading-relaxed">
+                  • يتم حفظ البيانات محلياً في متصفحك فقط.
                   <br />
-                  • تأكد من صحة المفاتيح لضمان عمل المزامنة السحابية.
+                  • الربط مع Vercel يتطلب توفير المتغيرات المذكورة أعلاه.
                 </p>
               </div>
             </form>
